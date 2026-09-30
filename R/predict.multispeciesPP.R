@@ -18,7 +18,11 @@ function (object, newdata,
         bias.mat <- model.matrix(object$bias.formula,newdata)
         good.rows <- rownames(bias.mat)
         pred[!(row.names(pred) %in% good.rows),] <- NA
-        pred[good.rows,] <- pred[good.rows,] + bias.mat[good.rows,] %*% object$bias.coef
+        ## the bias term is shared by all species: one value per row, recycled down the
+        ## columns.  (Adding the n x 1 product directly fails for more than one species,
+        ## and bias.mat[good.rows,] drops to a vector for a single bias covariate.)
+        pred[good.rows,] <- pred[good.rows,,drop=FALSE] +
+            c(bias.mat[good.rows,,drop=FALSE] %*% object$bias.coef)
         pred <- pred + rep(object$species.coef["isPO",species],each=nrow(pred))
     }
     pred
