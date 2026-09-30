@@ -9,13 +9,16 @@ function (object, newdata,
     object$na.action <- NULL
     pred <- matrix(0,nrow(newdata),length(species),dimnames=list(rownames(newdata),species))
     if(sdm) {
-        sdm.mat <-  model.matrix(object$sdm.formula,newdata)
+        ## fits from before sdm.terms was stored fall back to the bare formula
+        sdm.terms <- if(is.null(object$sdm.terms)) object$sdm.formula else object$sdm.terms
+        sdm.mat <-  model.matrix(sdm.terms,newdata)
         good.rows <- row.names(sdm.mat)
         pred[!(row.names(pred) %in% good.rows),] <- NA
         pred[good.rows,] <- sdm.mat %*% object$species.coef[-nrow(object$species.coef),species]
     }
     if(bias) {
-        bias.mat <- model.matrix(object$bias.formula,newdata)
+        bias.terms <- if(is.null(object$bias.terms)) object$bias.formula else object$bias.terms
+        bias.mat <- model.matrix(bias.terms,newdata)
         good.rows <- rownames(bias.mat)
         pred[!(row.names(pred) %in% good.rows),] <- NA
         ## the bias term is shared by all species: one value per row, recycled down the

@@ -351,7 +351,11 @@ function(sdm.formula, bias.formula, PA=NULL, PO=NULL, BG,
 
 
 
+    ## terms(*.mf) carry 'predvars': the knots/centres of data-dependent terms
+    ## (ns(), pbs(), poly(), scale()) as fixed on BG.  predict() must rebuild the
+    ## design from these, not from the bare formula, or it re-derives them from newdata.
     tr <- list(sdm.formula=sdm.formula,bias.formula=bias.formula,
+               sdm.terms=terms(sdm.mf),bias.terms=terms(bias.mf),
                normalized.species.coef=species.coef,normalized.bias.coef=bias.coef,
                normalized.all.coef=all.coef,normalized.std.errs=std.errs,
                all.coef=unstandardized.coef,

@@ -168,6 +168,10 @@ multispeciesPP(sdm.formula, bias.formula, PA = NULL, PO = NULL, BG,
   \item{species.PA, species.PO, species.RL}{The species contributing each source.}
   \item{sdm.margins.ab.RL}{Per-species column sums of the sdm design matrix over the
     RL detections, kept for diagnostics.}
+  \item{sdm.terms, bias.terms}{The terms of the two formulas as built on \code{BG}.
+    They hold the knots and centres of data-dependent terms such as \code{ns()} or
+    \code{poly()}, and \code{predict} rebuilds its design matrices from them, so
+    such terms are evaluated for new data exactly as they were fitted.}
 }
 \author{
   William Fithian
