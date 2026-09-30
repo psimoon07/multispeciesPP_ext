@@ -275,7 +275,7 @@ function(sdm.formula, bias.formula, PA=NULL, PO=NULL, BG,
     fit <- block.glm.fit(x,z,y,weights=weights,start=start,offset=offset,
                          families=list(linear(),binomial(link="cloglog"),poisson(),gaussian()),
                          row.families=rep(rep(1:4,c(1+n.species,n.PA,n.BG+n.RL,p.sdm+p.bias+2)),n.species),
-                         control=control)
+                         control=control,inverse.hessian=inverse.hessian)
 
     ## Postprocess fit
     all.coef <- fit$coefficients
@@ -369,15 +369,30 @@ function(sdm.formula, bias.formula, PA=NULL, PO=NULL, BG,
                linear.fit.BG=linear.fit.BG,fit.BG=fit.BG,
                linear.fit.RL=linear.fit.RL,fit.RL=fit.RL)
 
-    ##if(inverse.hessian) {
-    ##    inv.hess <- block.projection(x,z,w,u,inverse.hessian=TRUE)$inverse.hessian
-    ##    tr$inverse.hessian <- inv.hess/max.n.PO
-    ##
-    ##if(xzw) {
-    ##    tr$x <- x
-    ##    tr$z <- z
-    ##    tr$w <- w*sqrt(max.n.PO)
-    ##}
+    ## Covariance of the coefficients: the inverse Hessian of the penalized likelihood
+    ## at the last IRLS step, i.e. the matrix whose diagonal std.errs already reports.
+    if(inverse.hessian) {
+        normalized.vcov <- fit$fit$inverse.hessian
+        dimnames(normalized.vcov) <- list(names(all.coef),names(all.coef))
+
+        ## all.coef -> unstandardized.coef is a linear map (divide by the sds, then shift
+        ## alpha(k) and gamma(k) by the means, exactly as above); A is that map, so the
+        ## covariance on the original scale is A V A'.  Unlike std.errs, this is right
+        ## for the intercepts too.
+        jd <- n.species*(p.sdm+2) + seq_len(p.bias)
+        A <- diag(length(all.coef))
+        for(k in 1:n.species) {
+            jk <- (p.sdm+2)*(k-1) + 1:(p.sdm+1)
+            A[jk[1],jk[-1]] <- -sdm.means[-1]        # alpha(k)
+            A[jk[1]+p.sdm+1,jd] <- -bias.means       # gamma(k)
+        }
+        A <- sweep(A,2,sd.normalizer,"/")
+        vcov <- A %*% normalized.vcov %*% t(A)
+        dimnames(vcov) <- dimnames(normalized.vcov)
+
+        tr$normalized.vcov <- normalized.vcov
+        tr$vcov <- vcov
+    }
 
     class(tr) <- c("multispeciesPP","list")
     tr

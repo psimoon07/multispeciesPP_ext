@@ -98,7 +98,8 @@ multispeciesPP(sdm.formula, bias.formula, PA = NULL, PO = NULL, BG,
     covariates centered and scaled.
   }
   \item{inverse.hessian}{
-    Not currently used
+    If \code{TRUE}, also return the covariance matrix of the coefficients
+    (\code{vcov} and \code{normalized.vcov}, see Value).  The cost is negligible.
   }
   \item{penalty.l2.sdm}{
     L2 penalty on coefficients for the species intensity
@@ -162,6 +163,15 @@ multispeciesPP(sdm.formula, bias.formula, PA = NULL, PO = NULL, BG,
   \item{normalized.species.coef, normalized.bias.coef}{The same, on the standardized
     scale the model was fitted on.}
   \item{std.errs}{Standard errors; see the Warning about intercepts.}
+  \item{vcov, normalized.vcov}{Only with \code{inverse.hessian = TRUE}: the covariance
+    matrix of all coefficients, on the original covariate scale and on the standardized
+    scale the model was fitted on, with rows and columns named like \code{all.coef}.  It
+    is the inverse Hessian of the penalized likelihood, the matrix whose diagonal the
+    standard errors are taken from.  It is what the uncertainty of any quantity that
+    combines several coefficients needs, such as a spline curve: for a contrast
+    \eqn{c}, the variance is \eqn{c' V c}.  The diagonal of \code{vcov} agrees with
+    \code{std.errs} squared except in the intercept and \code{isPO} rows, where
+    \code{vcov} is the correct one.}
   \item{fit.PA, fit.BG, fit.RL}{Fitted intensities at the PA sites, the background
     points, and the RL quadrature rows, each per unit of that source's exposure.}
   \item{bias.fit.BG}{Fitted sampling bias at the background points.}

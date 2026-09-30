@@ -1,7 +1,7 @@
 Package: multispeciesPP
 Type: Package
 Title: Multispecies Poisson Process Models
-Version: 1.2
+Version: 1.3
 Date: 2026-09-30
 Author: William Fithian
 Maintainer: William Fithian <wfithian@stanford.edu>

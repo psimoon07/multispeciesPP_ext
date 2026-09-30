@@ -1,7 +1,8 @@
 block.glm.fit <-
 function(x, z, y, weights = rep(1, nobs), start = NULL, etastart = NULL,
                           mustart = NULL, offset = rep(0, nobs), families=list(gaussian()),
-                          row.families = rep(1, nobs), control = list())
+                          row.families = rep(1, nobs), control = list(),
+                          inverse.hessian = FALSE)
 {
     control <- do.call("glm.control", control)
     stopifnot(is.list(families))
@@ -134,7 +135,7 @@ function(x, z, y, weights = rep(1, nobs), start = NULL, etastart = NULL,
             u <- (eta - offset) + (y - mu)/mu.eta.val
             w <- sqrt((weights * mu.eta.val^2)/variance(mu))
             #ngoodobs <- as.integer(nobs - sum(!good))
-            fit <- block.projection(x,z,w,u,inverse.hessian=FALSE,
+            fit <- block.projection(x,z,w,u,inverse.hessian=inverse.hessian,
                                     wt.tol=min(1e-7,control$epsilon/1000))
             if (any(!is.finite(fit$coefficients))) {
                 conv <- FALSE
