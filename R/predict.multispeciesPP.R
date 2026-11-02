@@ -14,7 +14,10 @@ function (object, newdata,
         sdm.mat <-  model.matrix(sdm.terms,newdata)
         good.rows <- row.names(sdm.mat)
         pred[!(row.names(pred) %in% good.rows),] <- NA
-        pred[good.rows,] <- sdm.mat %*% object$species.coef[-nrow(object$species.coef),species]
+        ## select the sdm rows by name: species.coef also holds isPO and any source
+        ## offsets (is<source>), which are not part of lambda.  Prediction is thus on
+        ## the reference source's scale.
+        pred[good.rows,] <- sdm.mat %*% object$species.coef[colnames(sdm.mat),species,drop=FALSE]
     }
     if(bias) {
         bias.terms <- if(is.null(object$bias.terms)) object$bias.formula else object$bias.terms

@@ -17,9 +17,11 @@ multispeciesPP(sdm.formula, bias.formula, PA = NULL, PO = NULL, BG,
                species.PA = species, species.PO = species,
                RL = NULL, BG.RL = NULL, species.RL = names(RL),
                quadrat.size = 1, region.size = 1, quadrat.size.RL = 1,
+               source.PA = NULL, source.RL = NULL, source.ref = NULL,
                start = NULL, inverse.hessian = FALSE,
                penalty.l2.sdm = 0.1, penalty.l2.bias = 0.1,
                penalty.l2.intercept = 1e-04,
+               penalty.l2.source = penalty.l2.intercept,
                weights = rep(1, n.species * nrow(x)), control = list())
 }
 \arguments{
@@ -92,6 +94,18 @@ multispeciesPP(sdm.formula, bias.formula, PA = NULL, PO = NULL, BG,
     background for \eqn{W_{RL}} instead, pass random draws as \code{BG.RL} with
     \code{quadrat.size.RL = region.size.RL / nrow(BG.RL)}.
   }
+  \item{source.PA}{
+    Optional survey-source label of every row of \code{PA} (character or factor of
+    length \code{nrow(PA)}, no \code{NA}).  See Details, Source offsets.
+  }
+  \item{source.RL}{
+    Optional single source label of the RL block.
+  }
+  \item{source.ref}{
+    The reference source, whose rows get no offset.  Required when
+    \code{source.PA} or \code{source.RL} is given.  A block passed without labels
+    counts as the reference.  \code{"PO"} is reserved.
+  }
   \item{start}{
     Optional argument giving initial coefficients.  These should be in
     standardized form; i.e. they should correspond to a model with the
@@ -110,6 +124,11 @@ multispeciesPP(sdm.formula, bias.formula, PA = NULL, PO = NULL, BG,
   \item{penalty.l2.intercept}{
     L2 penalty on the intercepts
   }
+  \item{penalty.l2.source}{
+    L2 penalty on the source offsets.  The default is as weak as the intercept
+    penalty, so a weakly identified offset shows up as a large standard error rather
+    than being pulled to 0.
+  }
   \item{weights}{
     Observation weights
   }
@@ -126,6 +145,22 @@ multispeciesPP(sdm.formula, bias.formula, PA = NULL, PO = NULL, BG,
   margin row and the survey extent enters through the \code{BG.RL} quadrature rows.
 
   Passing \code{RL = NULL} reproduces the original two-source model exactly.
+
+  \strong{Source offsets.}  PA and RL are treated as complete censuses of their
+  exposure.  When survey protocols differ in how thoroughly they search, label the
+  rows with \code{source.PA} / \code{source.RL}.  Every source \eqn{s} other than
+  \code{source.ref} gets a species-specific coefficient \code{is<s>}, \eqn{\eta_{ks}},
+  added to the linear predictor of that source's rows only:
+  \deqn{P(y = 1) = 1 - \exp(-A\,\lambda_k\,e^{\eta_{ks}}) \quad\textrm{(PA)}, \qquad
+        E[N] = A\,\lambda_k\,e^{\eta_{ks}} \quad\textrm{(RL)}.}
+  \eqn{e^{\eta_{ks}}} is the share of the nominal exposure \eqn{A} that source
+  \eqn{s} effectively searches for species \eqn{k}, relative to the reference
+  source.  \eqn{\lambda_k}, the PO block and \code{predict} are unaffected, so
+  intensities are on the scale of the reference source.  The offset columns are
+  unstandardized indicators.  An offset is identified only by data where the source
+  and the reference (or other data on \eqn{\lambda_k}, such as PO) inform the same
+  covariate values; a source observed in different years than the reference, with a
+  year term in \code{sdm.formula}, is confounded with that term.
 }
 \section{Warning}{
   \strong{Units must agree across sources.}  \eqn{\alpha_k} is shared, so
@@ -158,7 +193,10 @@ multispeciesPP(sdm.formula, bias.formula, PA = NULL, PO = NULL, BG,
 \value{
   An object of class \code{multispeciesPP}, a list whose principal elements are
   \item{species.coef}{Matrix of species coefficients on the original covariate scale,
-    with rows \code{(Intercept)}, the \code{sdm.formula} terms, and \code{isPO}.}
+    with rows \code{(Intercept)}, the \code{sdm.formula} terms, one \code{is<s>} row
+    per non-reference source (only if sources are given), and \code{isPO}.}
+  \item{source.ref, source.levels}{The reference source (\code{NULL} without
+    sources) and the non-reference sources, in the order of their \code{is<s>} rows.}
   \item{bias.coef}{Bias coefficients \eqn{\delta} on the original covariate scale.}
   \item{normalized.species.coef, normalized.bias.coef}{The same, on the standardized
     scale the model was fitted on.}

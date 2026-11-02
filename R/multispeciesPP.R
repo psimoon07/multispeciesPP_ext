@@ -4,12 +4,53 @@ function(sdm.formula, bias.formula, PA=NULL, PO=NULL, BG,
              species.PA=species,species.PO=species,
          RL=NULL, BG.RL=NULL, species.RL=names(RL),
          quadrat.size=1,region.size=1,quadrat.size.RL=1,
+         source.PA=NULL,source.RL=NULL,source.ref=NULL,
          start=NULL,inverse.hessian=FALSE,
          penalty.l2.sdm=.1,penalty.l2.bias=.1,
          penalty.l2.intercept=1E-4,  # should be small but nonzero, protects against singularities
+         penalty.l2.source=penalty.l2.intercept,
          weights=rep(1,n.species*nrow(x)),
          control=list()) {
     control <- do.call("glm.control", control)
+
+    ## Survey-source detection offsets.  Each PA row and the RL block can carry a
+    ## source label; every label other than source.ref gets a species-specific
+    ## coefficient is<label>, added to the linear predictor of that source's rows
+    ## only:  PA  P(y=1) = 1 - exp(-A * lambda * exp(is<s>)),  RL  E[N] = A * lambda * exp(is<s>).
+    ## exp(is<s>) is the share of the nominal exposure that source effectively
+    ## searches, relative to the reference source.  lambda itself, PO and BG are
+    ## untouched, so predict() returns intensity on the reference source's scale.
+    use.source <- !is.null(source.PA) || !is.null(source.RL)
+    source.levels <- character(0)
+    if(use.source) {
+        if(is.null(source.ref) || length(source.ref) != 1 || is.na(source.ref))
+            stop("source.ref must name the reference source when source.PA or source.RL is given")
+        source.ref <- as.character(source.ref)
+        if(!is.null(source.PA)) {
+            if(is.null(PA)) stop("source.PA given without PA")
+            if(length(source.PA) != nrow(PA) || anyNA(source.PA))
+                stop("source.PA must give a source label for every row of PA, without NA")
+            source.PA <- as.character(source.PA)
+        }
+        if(!is.null(source.RL)) {
+            if(is.null(BG.RL)) stop("source.RL given without RL/BG.RL")
+            if(length(source.RL) != 1 || is.na(source.RL))
+                stop("source.RL must be a single source label: the RL block is one protocol")
+            source.RL <- as.character(source.RL)
+        }
+        all.sources <- unique(c(source.PA,source.RL))
+        ## A block supplied without labels counts as the reference source.
+        anchored <- source.ref %in% all.sources ||
+                    (!is.null(PA) && is.null(source.PA)) ||
+                    (!is.null(BG.RL) && is.null(source.RL))
+        if(!anchored)
+            stop("source.ref ('",source.ref,"') labels no rows: no data would anchor the intensity scale")
+        source.levels <- sort(setdiff(all.sources,source.ref))
+        if("PO" %in% source.levels)
+            stop("'PO' is reserved as a source label: the PO block already has its own isPO intercept")
+    }
+    q.src <- length(source.levels)
+    src.names <- if(q.src > 0) paste0("is",source.levels) else character(0)
 
     ## RL detections and RL quadrature must be supplied together: the detections
     ## give the sum term of the point-process likelihood and the quadrature rows
@@ -151,12 +192,15 @@ function(sdm.formula, bias.formula, PA=NULL, PO=NULL, BG,
                     ".  Their alpha is determined by penalty.l2.intercept alone.")
     }
 
+    ## Per-species coefficient block: alpha | beta (p.sdm) | source offsets (q.src) | gamma
+    P <- p.sdm + q.src + 2
+
     abcd.from.all.coef <- function(all.coef) {
-        sdm.coef <- matrix(all.coef[1:(n.species*(p.sdm+2))],p.sdm+2,n.species)
+        sdm.coef <- matrix(all.coef[1:(n.species*P)],P,n.species)
         alpha <- sdm.coef[1,]
         beta <- t(sdm.coef[2:(p.sdm+1),,drop=FALSE])
-        gamma <- sdm.coef[p.sdm+2,]
-        delta <- all.coef[-(1:(n.species*(p.sdm+2)))]
+        gamma <- sdm.coef[P,]
+        delta <- all.coef[-(1:(n.species*P))]
 
         names(alpha) <- names(gamma) <- species
         colnames(beta) <- colnames(sdm.margins.ab)[-1]
@@ -165,8 +209,9 @@ function(sdm.formula, bias.formula, PA=NULL, PO=NULL, BG,
         return(list(alpha=alpha,beta=beta,gamma=gamma,delta=delta))
     }
 
-    all.coef.from.abcd <- function(alpha,beta,gamma,delta) {
-        c(rbind(alpha,beta,gamma),delta)
+    all.coef.from.abcd <- function(alpha,beta,gamma,delta,
+                                   src=matrix(0,q.src,length(alpha))) {
+        c(rbind(alpha,beta,src,gamma),delta)
     }
 
     n.PA <- length(PA.good.rows)
@@ -176,29 +221,54 @@ function(sdm.formula, bias.formula, PA=NULL, PO=NULL, BG,
     subsamp.BG.offset <- 0
     n.sites <- n.BG+n.PA+n.RL
 
+    ## Source-offset columns: an indicator of each non-reference source on the PA and
+    ## RL quadrature rows, 0 on BG (and so on PO).  They are not standardized.  In the
+    ## sum term of the RL likelihood, log lambda at every detection carries the offset
+    ## too, so the species-k margin of the RL source column is its RL detection count.
+    src.PA <- matrix(0,n.PA,q.src,dimnames=list(NULL,src.names))
+    src.RL <- matrix(0,n.RL,q.src,dimnames=list(NULL,src.names))
+    sdm.margins.src <- matrix(0,n.species,q.src,dimnames=list(species,src.names))
+    if(q.src > 0) {
+        if(!is.null(source.PA) && n.PA > 0)
+            src.PA[] <- 1*outer(source.PA[match(PA.good.rows,rownames(PA))],source.levels,"==")
+        if(!is.null(source.RL) && source.RL %in% source.levels) {
+            j <- match(source.RL,source.levels)
+            src.RL[,j] <- 1
+            for(sp in species.RL)
+                sdm.margins.src[match(sp,species),j] <- length(RL.good.rows[[sp]])
+        }
+    }
+
     ## Combine matrices into X and Z.  Row blocks, in order:
     ##   n.species sdm margins | 1 bias margin | n.PA | n.BG | n.RL | penalty
+    ## Columns: sdm (intercept + p.sdm) | source offsets (q.src) | isPO.
     ## The last column of x is the isPO indicator: 1 on BG rows only.  RL rows get 0,
     ## because an exhaustive census has no bias intercept -- RL's linear predictor is
-    ## exactly alpha_k + beta_k' X(u), the same coefficients every other source uses.
+    ## exactly alpha_k + beta_k' X(u) (+ its source offset, if it has one).
     x <- cbind(rbind(sdm.margins.ab,    # extra rows for the positive obs
                      0,
                      sdm.PA.model.matrix[PA.good.rows,,drop=FALSE],
                      sdm.BG.model.matrix[BG.good.rows,,drop=FALSE],
                      sdm.BG.RL.model.matrix[BG.RL.good.rows,,drop=FALSE]),
+               rbind(sdm.margins.src,
+                     matrix(0,1,q.src),
+                     src.PA,
+                     matrix(0,n.BG,q.src),
+                     src.RL),
                c(sdm.margins.gamma,rep(c(0,1,0),c(1+n.PA,n.BG,n.RL))))
 
     ## add pseudodata for penalty on (non-intercept) beta and delta
     x <- rbind(x,
-               diag(sqrt(c(penalty.l2.intercept, rep(penalty.l2.sdm,p.sdm), penalty.l2.intercept))),
-               matrix(0,p.bias,p.sdm+2))
+               diag(sqrt(c(penalty.l2.intercept, rep(penalty.l2.sdm,p.sdm),
+                           rep(penalty.l2.source,q.src), penalty.l2.intercept))),
+               matrix(0,p.bias,P))
 
     z <- rbind(matrix(0,n.species,p.bias),
                bias.margins,
                matrix(0,n.PA,p.bias),
                bias.BG.model.matrix[BG.good.rows,,drop=FALSE],
                matrix(0,n.RL,p.bias),   # no bias covariates enter the RL block
-               matrix(0,p.sdm+2,p.bias),
+               matrix(0,P,p.bias),
                sqrt(penalty.l2.bias/n.species)*diag(p.bias))
 
     y <- rep(0,nrow(x)*n.species)
@@ -231,7 +301,7 @@ function(sdm.formula, bias.formula, PA=NULL, PO=NULL, BG,
                 yk[1 + n.species + n.PA + n.BG + (1:n.RL)] <- NA
             }
         }
-        yk[1 + n.species + n.sites + (1:(p.sdm + 2 + p.bias))] <- 0  # penalty
+        yk[1 + n.species + n.sites + (1:(P + p.bias))] <- 0  # penalty
 
         y[(k-1)*nrow(x) + 1:nrow(x)] <- yk
 
@@ -274,23 +344,23 @@ function(sdm.formula, bias.formula, PA=NULL, PO=NULL, BG,
     }
     fit <- block.glm.fit(x,z,y,weights=weights,start=start,offset=offset,
                          families=list(linear(),binomial(link="cloglog"),poisson(),gaussian()),
-                         row.families=rep(rep(1:4,c(1+n.species,n.PA,n.BG+n.RL,p.sdm+p.bias+2)),n.species),
+                         row.families=rep(rep(1:4,c(1+n.species,n.PA,n.BG+n.RL,P+p.bias)),n.species),
                          control=control,inverse.hessian=inverse.hessian)
 
     ## Postprocess fit
     all.coef <- fit$coefficients
     eta <- fit$linear.predictors
     mu <- fit$fitted.values
-    names(all.coef)[1:(n.species*(p.sdm+2))] <-
-        paste(rep(species,each=p.sdm+2),c(colnames(sdm.BG.model.matrix)[1:(p.sdm+1)],"isPO"),sep=":")
-    names(all.coef)[-(1:(n.species*(p.sdm+2)))] <- paste("isPO:",colnames(bias.BG.model.matrix),sep="")
+    coef.rows <- c(colnames(sdm.BG.model.matrix)[1:(p.sdm+1)],src.names,"isPO")
+    names(all.coef)[1:(n.species*P)] <- paste(rep(species,each=P),coef.rows,sep=":")
+    names(all.coef)[-(1:(n.species*P))] <- paste("isPO:",colnames(bias.BG.model.matrix),sep="")
 
     std.errs <- fit$fit$std.errs
     names(std.errs) <- names(all.coef)
 
-    species.coef <- matrix(all.coef[1:(n.species*(p.sdm+2))],p.sdm+2,n.species,
-                           dimnames=list(c(colnames(sdm.margins.ab),"isPO"),species))
-    bias.coef <- all.coef[-(1:(n.species*(p.sdm+2)))]
+    species.coef <- matrix(all.coef[1:(n.species*P)],P,n.species,
+                           dimnames=list(coef.rows,species))
+    bias.coef <- all.coef[-(1:(n.species*P))]
     names(bias.coef) <- colnames(bias.BG.model.matrix)
 
     n.PA.rows <- if(use.PA) nrow(PA) else 0
@@ -326,7 +396,7 @@ function(sdm.formula, bias.formula, PA=NULL, PO=NULL, BG,
 
     ## RL touches neither gamma nor delta (isPO column is 0 and z is 0 on its rows), so
     ## both score checks below are unchanged by the RL block.
-    score.check.gamma <- fitted.sdm.margins.gamma - sdm.margins.gamma + penalty.l2.intercept*species.coef[p.sdm+2,]
+    score.check.gamma <- fitted.sdm.margins.gamma - sdm.margins.gamma + penalty.l2.intercept*species.coef["isPO",]
     score.check.gamma <- score.check.gamma[species %in% species.PO]
 
     score.check.bias <- fitted.bias.margins - bias.margins + penalty.l2.bias*bias.coef
@@ -335,18 +405,19 @@ function(sdm.formula, bias.formula, PA=NULL, PO=NULL, BG,
     if(length(score.check.gamma)>0) stopifnot(mean((score.check.gamma/fit$deviance)^2) < control$epsilon)
     stopifnot(mean((score.check.bias/fit$deviance)^2) < control$epsilon)
 
-    sd.normalizer <- c(rep(c(sdm.sds,1),n.species),bias.sds)
+    ## Source-offset columns are unstandardized indicators: scale 1, no mean shift.
+    sd.normalizer <- c(rep(c(sdm.sds,rep(1,q.src),1),n.species),bias.sds)
     unstandardized.coef <- all.coef/sd.normalizer
-    gamma.adjust <- sum(unstandardized.coef[-(1:(n.species*(p.sdm+2)))] * bias.means)
+    gamma.adjust <- sum(unstandardized.coef[-(1:(n.species*P))] * bias.means)
     for(k in 1:n.species) {
-        jk <- (p.sdm+2)*(k-1) + 1:(p.sdm+1)
+        jk <- P*(k-1) + 1:(p.sdm+1)
         coef.block <- unstandardized.coef[jk]
         unstandardized.coef[jk[1]] <- coef.block[1] - sum(coef.block[-1] * sdm.means[-1])       # adjust alpha(k)
-        unstandardized.coef[jk[1]+p.sdm+1] <- unstandardized.coef[jk[1]+p.sdm+1] - gamma.adjust # adjust gamma(k)
+        unstandardized.coef[P*k] <- unstandardized.coef[P*k] - gamma.adjust                     # adjust gamma(k)
     }
-    unstandardized.species.coef <- matrix(unstandardized.coef[1:(n.species*(p.sdm+2))],p.sdm+2,n.species,
-                                          dimnames=list(c(colnames(sdm.margins.ab),"isPO"),species))
-    unstandardized.bias.coef <- unstandardized.coef[-(1:(n.species*(p.sdm+2)))]
+    unstandardized.species.coef <- matrix(unstandardized.coef[1:(n.species*P)],P,n.species,
+                                          dimnames=list(coef.rows,species))
+    unstandardized.bias.coef <- unstandardized.coef[-(1:(n.species*P))]
     names(unstandardized.bias.coef) <- colnames(bias.BG.model.matrix)
 
 
@@ -363,6 +434,8 @@ function(sdm.formula, bias.formula, PA=NULL, PO=NULL, BG,
                species.coef=unstandardized.species.coef,
                bias.coef=unstandardized.bias.coef,
                species.PA=species.PA,species.PO=species.PO,species.RL=species.RL,
+               source.ref=if(use.source) source.ref else NULL,
+               source.levels=source.levels,
                sdm.margins.ab.RL=sdm.margins.ab.RL,
                linear.fit.PA=linear.fit.PA,fit.PA=fit.PA,
                linear.bias.fit.BG=linear.bias.fit.BG,bias.fit.BG=bias.fit.BG,
@@ -379,12 +452,12 @@ function(sdm.formula, bias.formula, PA=NULL, PO=NULL, BG,
         ## alpha(k) and gamma(k) by the means, exactly as above); A is that map, so the
         ## covariance on the original scale is A V A'.  Unlike std.errs, this is right
         ## for the intercepts too.
-        jd <- n.species*(p.sdm+2) + seq_len(p.bias)
+        jd <- n.species*P + seq_len(p.bias)
         A <- diag(length(all.coef))
         for(k in 1:n.species) {
-            jk <- (p.sdm+2)*(k-1) + 1:(p.sdm+1)
+            jk <- P*(k-1) + 1:(p.sdm+1)
             A[jk[1],jk[-1]] <- -sdm.means[-1]        # alpha(k)
-            A[jk[1]+p.sdm+1,jd] <- -bias.means       # gamma(k)
+            A[P*k,jd] <- -bias.means                 # gamma(k)
         }
         A <- sweep(A,2,sd.normalizer,"/")
         vcov <- A %*% normalized.vcov %*% t(A)
